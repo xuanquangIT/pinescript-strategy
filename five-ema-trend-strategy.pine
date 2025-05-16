@@ -1,0 +1,95 @@
+//@version=6
+strategy("5 EMA Trend Strategy", overlay=true, initial_capital=100000, currency=currency.USD, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+//================ INPUTS =================
+fastEMA_period = input.int(6, "EMA6", minval=1)
+ema10_period   = input.int(10, "EMA10", minval=1)
+ema20_period   = input.int(20, "EMA20", minval=1)
+ema50_period   = input.int(50, "EMA50", minval=1)
+ema100_period  = input.int(100, "EMA100", minval=1)
+sl_candles     = input.int(8, "Số nến cho SL", minval=1)
+rr_default     = input.float(2.0, "Tỉ lệ RR mặc định", step=0.1)
+rr_breakeven   = input.float(1.0, "Tỉ lệ RR dời TP hòa vốn", step=0.1)
+autoCloseBuy   = input.bool(true, "Tự động đóng BUY khi nến đóng cửa < EMA50")
+autoCloseSell  = input.bool(true, "Tự động đóng SELL khi nến đóng cửa > EMA50")
+
+//================ TÍNH TOÁN EMA =================
+ema6   = ta.ema(close, fastEMA_period)
+ema10  = ta.ema(close, ema10_period)
+ema20  = ta.ema(close, ema20_period)
+ema50  = ta.ema(close, ema50_period)
+ema100 = ta.ema(close, ema100_period)
+
+// Vẽ các đường EMA
+plot(ema6, color=color.yellow, title="EMA6")
+plot(ema10, color=color.blue, title="EMA10")
+plot(ema20, color=color.orange, title="EMA20")
+plot(ema50, color=color.green, title="EMA50")
+plot(ema100, color=color.red, title="EMA100")
+
+//================ QUẢN LÝ VỊ THẾ =================
+// Biến dùng cho SL và theo dõi hướng giao dịch trước đó: 0 = chưa có, 1 = Long, -1 = Short
+var float longStop  = na
+var float shortStop = na
+var int lastDirection = 0
+
+// Khi không có vị thế mở, cập nhật hướng giao dịch từ nến trước (dùng dữ liệu của nến đã đóng)
+if strategy.position_size == 0
+    if strategy.position_size[1] > 0
+        lastDirection := 1
+    else if strategy.position_size[1] < 0
+        lastDirection := -1
+
+//================ XÁC ĐỊNH TÍN HIỆU DỰA TRÊN NẾN ĐÃ ĐÓNG =================
+// Sử dụng dữ liệu của nến liền trước (chỉ số [1])
+prevOpen   = open[1]
+prevClose  = close[1]
+prevEma6   = ema6[1]
+prevEma10  = ema10[1]
+prevEma20  = ema20[1]
+prevEma50  = ema50[1]
+prevEma100 = ema100[1]
+
+// Tín hiệu BUY: nến có open dưới EMA6 và close trên EMA6, đồng thời các EMA theo thứ tự giảm dần và nến đóng cửa trên EMA50
+buySignal = (prevOpen < prevEma6) and (prevClose > prevEma6) and (prevEma6 > prevEma10 and prevEma10 > prevEma20 and prevEma20 > prevEma50 and prevEma50 > prevEma100) and (prevClose > prevEma50)
+
+// Tín hiệu SELL: nến có open trên EMA6 và close dưới EMA6, đồng thời các EMA theo thứ tự tăng dần và nến đóng cửa dưới EMA50
+sellSignal = (prevOpen > prevEma6) and (prevClose < prevEma6) and (prevEma6 < prevEma10 and prevEma10 < prevEma20 and prevEma20 < prevEma50 and prevEma50 < prevEma100) and (prevClose < prevEma50)
+
+// Điều kiện vào lệnh: chỉ vào nếu không có vị thế mở và lệnh trước đó trái hướng
+buyCondition  = buySignal and (lastDirection != 1) and (strategy.position_size == 0)
+sellCondition = sellSignal and (lastDirection != -1) and (strategy.position_size == 0)
+
+//================ TÍNH SL DỰA TRÊN 8 NẾN ĐÃ ĐÓNG =================
+// SL cho BUY: giá thấp nhất của 8 nến liền trước (dữ liệu từ low[1])
+buySL  = ta.lowest(low[1], sl_candles)
+// SL cho SELL: giá cao nhất của 8 nến liền trước (dữ liệu từ high[1])
+sellSL = ta.highest(high[1], sl_candles)
+
+//================ VÀO LỆNH =================
+if buyCondition
+    longStop := buySL
+    strategy.entry("Long", strategy.long)
+if sellCondition
+    shortStop := sellSL
+    strategy.entry("Short", strategy.short)
+
+//================ QUẢN LÝ LỆNH BUY =================
+if strategy.position_size > 0
+    risk = strategy.position_avg_price - longStop
+    tp_long = strategy.position_avg_price + risk * rr_default
+    if (close - strategy.position_avg_price) >= (risk * rr_breakeven)
+        tp_long := strategy.position_avg_price
+    strategy.exit("Long Exit", "Long", stop=longStop, limit=tp_long)
+    if autoCloseBuy and close < ema50
+        strategy.close("Long")
+
+//================ QUẢN LÝ LỆNH SELL =================
+if strategy.position_size < 0
+    risk_sell = shortStop - strategy.position_avg_price
+    tp_sell = strategy.position_avg_price - risk_sell * rr_default
+    if (strategy.position_avg_price - close) >= (risk_sell * rr_breakeven)
+        tp_sell := strategy.position_avg_price
+    strategy.exit("Short Exit", "Short", stop=shortStop, limit=tp_sell)
+    if autoCloseSell and close > ema50
+        strategy.close("Short")

@@ -1,0 +1,69 @@
+//@version=6
+strategy("ADX-Filtered Mean Reversion", 
+   overlay=true, 
+   initial_capital=100000, 
+   default_qty_type=strategy.fixed, 
+   default_qty_value=1)
+
+// === Inputs ===
+emaShortLen   = input.int(40,  "Short EMA Length")
+emaLongLen    = input.int(190, "Long EMA Length")
+rsiLen        = input.int(14,  "RSI Length")
+rsiOB         = input.int(72,  "RSI Overbought", minval=50, maxval=100)
+rsiOS         = input.int(35,  "RSI Oversold",   minval=0,  maxval=50)
+bbLen         = input.int(21,  "Bollinger Length")
+bbMult        = input.float(2.0, "Bollinger StdDev")
+diLen         = input.int(14,  "DI Length")
+adxSmooth     = input.int(16,  "ADX Smoothing")
+adxThresh     = input.int(25,  "ADX Threshold", minval=1)
+atrLen        = input.int(9,  "ATR Length")
+atrStopMult   = input.float(0.8, "ATR Stop Multiplier", step=0.1)
+atrTPMult     = input.float(2.0, "ATR Target Multiplier", step=0.1)
+
+// === Indicators ===
+// Trend EMAs
+emaShort = ta.ema(close, emaShortLen)
+emaLong  = ta.ema(close, emaLongLen)
+// RSI
+rsiVal   = ta.rsi(close, rsiLen)
+// Bollinger Bands
+basis    = ta.sma(close, bbLen)
+dev      = bbMult * ta.stdev(close, bbLen)
+upperBB  = basis + dev
+lowerBB  = basis - dev
+// ATR for SL/TP
+atrVal   = ta.atr(atrLen)
+// ADX via DMI
+[diPlus, diMinus, adxVal] = ta.dmi(diLen, adxSmooth)   
+
+// === Market Regime Filters ===
+upTrend    = emaShort > emaLong and adxVal > adxThresh
+downTrend  = emaShort < emaLong and adxVal > adxThresh
+
+// === Entry Signals ===
+longSignal  = upTrend   and close < lowerBB and rsiVal < rsiOS
+shortSignal = downTrend and close > upperBB and rsiVal > rsiOB
+
+// === Plot (optional) ===
+plot(emaShort, color=color.blue,  title="EMA Short")
+plot(emaLong,  color=color.orange, title="EMA Long")
+plot(upperBB,  color=color.gray,  title="BB Upper")
+plot(lowerBB,  color=color.gray,  title="BB Lower")
+
+// === Entries ===
+if strategy.position_size == 0
+    if longSignal
+        strategy.entry("Long", strategy.long)
+    if shortSignal
+        strategy.entry("Short", strategy.short)
+
+// === Exits: ATR-based Stop & Target ===
+if strategy.position_size > 0
+    stopLevel = strategy.position_avg_price - atrVal * atrStopMult
+    tpLevel   = strategy.position_avg_price + atrVal * atrTPMult
+    strategy.exit("Exit Long", from_entry="Long", stop=stopLevel, limit=tpLevel)
+
+if strategy.position_size < 0
+    stopLevel = strategy.position_avg_price + atrVal * atrStopMult
+    tpLevel   = strategy.position_avg_price - atrVal * atrTPMult
+    strategy.exit("Exit Short", from_entry="Short", stop=stopLevel, limit=tpLevel)
